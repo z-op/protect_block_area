@@ -23,8 +23,8 @@
 local aS = minetest.get_translator("areas")
 local S = minetest.get_translator("protect_block_area")
 
-local protector_radius = tonumber(minetest.settings:get("area_protector_radius")) or
-tonumber(minetest.settings:get("protector_radius")) or 5
+local protector_radius = tonumber(minetest.settings:get("area_protector_radius")) or tonumber(minetest.settings:get("protector_radius")) or 5
+local protector_show = tonumber(minetest.settings:get("protector_show_interval")) or 5
 local protector_placing_delay = tonumber(minetest.settings:get("area_protector_delay")) or 2
 
 local in_delay = {}
@@ -41,11 +41,55 @@ local function get_node_place_position(pointed_thing)
 	return false
 end
 
+-- make sure protection block doesn't overlap another protector's area
+--[[
+local function check_overlap(itemstack, placer, pointed_thing)
+
+	if pointed_thing.type ~= "node" then return itemstack end
+
+	local pos = pointed_thing.above
+	local name = placer:get_player_name()
+
+	-- make sure protector doesn't overlap onto protected spawn area
+--	if inside_spawn(pos, protector_spawn + protector.radius) then
+
+--		minetest.chat_send_player(name,
+--				S("Spawn @1 has been protected up to a @2 block radius.",
+--				minetest.pos_to_string(statspawn), protector_spawn))
+--
+--		return itemstack
+--	end
+
+	-- make sure protector doesn't overlap any other player's area
+	if not protector.can_dig(protector.radius * 2, pos, name, true, 3) then
+
+		minetest.chat_send_player(name,
+				S("Overlaps into above players protected area"))
+
+		return itemstack
+	end
+
+	return minetest.item_place(itemstack, placer, pointed_thing)
+end
+--]]
+-- remove protector display entities
+
+local function del_display(pos)
+
+	local objects = minetest.get_objects_inside_radius(pos, 0.5)
+
+	for _, v in ipairs(objects) do
+
+		if v and v:get_luaentity() and v:get_luaentity().name == "protect_block_area:display" then
+			v:remove()
+		end
+	end
+end
+
 local common_def = {
 	on_place = function(itemstack, placer, pointed_thing)
-		if pointed_thing.type ~= "node" then
-			return itemstack
-		end
+		if pointed_thing.type ~= "node" then return itemstack end
+
 		local pos = get_node_place_position(pointed_thing)
 		if not pos then
 			return itemstack
@@ -60,9 +104,7 @@ local common_def = {
 				return itemstack
 			end
 		end
-		if not placer:is_player() then
-			return itemstack
-		end
+		if not placer:is_player() then return itemstack end
 		local pname = placer:get_player_name()
 		if in_delay[pname] then
 			minetest.chat_send_player(pname,
@@ -93,6 +135,8 @@ local common_def = {
 				color = "#7ba428",
 				player = placer,
 			})
+		else
+			minetest.add_entity(pos, "protect_block_area:display")
 		end
 
 		minetest.chat_send_player(pname, aS("Area protected. ID: @1", id))
@@ -112,6 +156,7 @@ local common_def = {
 		end)
 		return itemstack
 	end,
+	--on_place = check_overlap,
 	on_dig = function(pos, node, digger)
 		if not digger:is_player() then
 			return false
@@ -149,14 +194,16 @@ local common_def = {
 		areas:setPos1(name, pos1)
 		areas:setPos2(name, pos2)
 		minetest.chat_send_player(name, aS("Area @1 selected.", id))
-
+		minetest.add_entity(pos, "protect_block_area:display")
 		if minetest.get_modpath("vizlib") then
 			vizlib.draw_area(vector.add(pos1, -0.5), vector.add(pos2, 0.5), {
 				color = "#7ba428",
 				player = puncher,
 			})
 		end
-	end
+	end,
+
+	after_destruct = del_display
 }
 
 local function override(new_def)
@@ -222,3 +269,53 @@ else
 		}
 	})
 end
+
+
+minetest.register_entity("protect_block_area:display", {
+
+	initial_properties = {
+		physical = false,
+		collisionbox = {0, 0, 0, 0, 0, 0},
+		visual = "wielditem",
+		-- wielditem seems to be scaled to 1.5 times original node size
+		visual_size = {x = 0.67, y = 0.67},
+		textures = {"protect_block_area:display_node"},
+		glow = 10
+	},
+
+	timer = 0,
+
+	on_step = function(self, dtime)
+
+		self.timer = self.timer + dtime
+
+		-- remove after set number of seconds
+		if self.timer > protector_show then self.object:remove() end
+	end
+})
+
+local r = protector_radius
+
+minetest.register_node("protect_block_area:display_node", {
+	tiles = {"protector_display.png"},
+	use_texture_alpha = "clip",
+	walkable = false,
+	drawtype = "nodebox",
+	node_box = {
+		type = "fixed",
+		fixed = {
+			{-(r+.55), -(r+.55), -(r+.55), -(r+.45), (r+.55), (r+.55)}, -- sides
+			{-(r+.55), -(r+.55), (r+.45), (r+.55), (r+.55), (r+.55)},
+			{(r+.45), -(r+.55), -(r+.55), (r+.55), (r+.55), (r+.55)},
+			{-(r+.55), -(r+.55), -(r+.55), (r+.55), (r+.55), -(r+.45)},
+			{-(r+.55), (r+.45), -(r+.55), (r+.55), (r+.55), (r+.55)}, -- top
+			{-(r+.55), -(r+.55), -(r+.55), (r+.55), -(r+.45), (r+.55)}, -- bottom
+			{-.55,-.55,-.55, .55,.55,.55} -- middle (surrounding protector)
+		}
+	},
+	selection_box = {type = "regular"},
+	paramtype = "light",
+	groups = {dig_immediate = 3, not_in_creative_inventory = 1},
+	drop = "",
+	on_blast = function() end
+})
